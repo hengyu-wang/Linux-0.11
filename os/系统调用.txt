@@ -1,0 +1,36 @@
+      当调用printf函数时，通过c语言库把printf函数翻译（改写）成write（系统接口）在write.s中只有一个宏定义syscall1（_syscall1 是一个宏，在 include/unistd.h 中定义。），在这个宏定义中首先进行一些赋值操作，把#_NR_write赋值给eax等。后直接执行int 0x80中断，其main函数如下：
+void main(void)
+{
+//    ……
+    time_init();
+    sched_init();
+    buffer_init(buffer_memory_end);
+//    ……
+}
+
+而sched-init函数再kernel/sched.c中定义为
+void sched_init(void)
+{
+//    ……
+    set_system_gate(0x80,&system_call); //也是一个宏，建立中断门，把值交给sys_call_table（用来查找中断处理函数地址的函数，是一个函数指针数组的起始地址），展开来就是把80号中断以及addr传过去。
+
+}
+sys_call_table就是定义再include/linux/sys.h下的一个数组（地址）
+fn_ptr sys_call_table[] = { sys_setup, sys_exit, sys_fork, sys_read,...
+里面存的就是函数指针，一个占4字节
+通过（4*8+IDT表基地址，一个中断描述符占8个字节64位 因为80号中断的DPL设成了3，所以用户程序/系统接口时可以访问到的，当程序进入了中断描述表后，因为INT 0x80的段描述符为8，偏移为处理中断函数的地址，而且set——gate函数把8赋给了段选择符（即将来要跳到的处理函数的段地址)，接下来cs等于8（相当于进入了内核段），ip = &systen_call等效于把CPL（cs的后两位置成了0），于是进入了内核段，完成了特权级的转化。
+
+虽然看起来挺麻烦，但实际上很简单，就是填写 IDT（中断描述符表），将 system_call 函数地址写到 0x80 对应的中断描述符中，也就是在中断 0x80 发生后，自动调用函数 system_call。
+
+
+附：gdt表的0x8 当代码寄存器例如cs被赋值为0x8时，指向的是操作系统的起始代码段，当数据寄存器例如ds被赋值为0x10时，指向的是起始数据段（因为16号索引处经过硬件处理得到的32位地址刚好指向初始内核数据处
+
+
+
+总体：
+1 应用程序调用库函数（API）    《write(syscall1)宏定义》
+2 API将系统调用号存入EAX，然后通过中断调用使系统进入内核态 《sched_init()->set_system_gate（_set_gate）宏定义，在_set_gate中将cs赋值为8，进入内核程序syscall》
+3 内核中的中断处理函数根据系统调用号，调用对应的内核函数（系统调用）《在call sys_call_table(,%eax,4)中，翻译成sys_call_table+4*%eax，而eax存的是系统调用号，syscall_table是一个函数调用首地址》
+4 系统调用完成相应功能，将返回值存入EAX，返回到中断处理函数
+5 中断处理函数返回到API中
+6 API将EAX返回给应用程序

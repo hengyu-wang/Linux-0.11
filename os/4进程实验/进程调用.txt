@@ -1,0 +1,41 @@
+void sleep_on(struct task_struct **p)
+{
+	struct task_struct *tmp;			/**p指向的是等待队列（都处于睡眠状态的进程组成的队列）的队首，此时声明一个tmp指针用来指向当前等待队列的队首，然后把*p置成了当前进程，也就是让当前进程变成等待队列的队首（而且tmp是它的一个变量，指向下一个睡眠的进程，也就是原来的等待队列队首）*/
+
+	if (!p)
+		return;      /*若指针无效则退出，指针指向的内容可以为NULL，但是指针本身不会为空*/
+	if (current == &(init_task.task))   /*如果当前进程等于0，则死机*/
+		panic("task[0] trying to sleep");
+	tmp = *p;
+	*p = current;
+	current->state = TASK_UNINTERRUPTIBLE;  /*不可中断睡眠*/
+	fprintk(3,"%ld\t%c\t%ld\n",current->pid,'w',jiffies); 进入睡眠状态，将当前进程状态改为wait
+	schedule();/*如果等到该睡眠进程需要被执行后，是从调度函数schedule开始执行*/
+	if (tmp)
+		tmp->state=0;  /*嵌套调用，如果执行到了这一步，说明该睡眠进程的前一个进程以及被唤醒了，那么因为该等待队列的所有进程都在等待同1个资源，所以要唤醒该队列所有进程，也就是通过tmp.state = 0(run),也就是置下一个进程为唤醒 以此循环，所有进程都会被唤醒，直到tmp==0,到达最后一个进程*/
+		fprintk(3,"%ld\t%c\t%ld\n",tmp->pid,'J',jiffies); 将下一个进程改为就绪态
+}
+void interruptible_sleep_on(struct task_struct **p)
+{
+	struct task_struct *tmp;
+
+	if (!p)
+		return;
+	if (current == &(init_task.task))
+		panic("task[0] trying to sleep");
+	tmp=*p;
+	*p=current;
+repeat:	current->state = TASK_INTERRUPTIBLE;
+	if(current->pid != 0) /*对于一般的可中断睡眠进程，调用pause意味着我们必须收到一个信号才能返回就绪态，但是进程0是一个意外。它在任何情况下只要没有进程在运行，就是0进程在运行*/
+		fprintk(3,"%ld\t%c\t%ld\n",current->pid,'w',jiffies);
+	schedule();
+	if (*p && *p != current) {   /*如果当前进程是可中断的，那么我可能在等待队列中间唤醒了一个进程，那么通过tmp的嵌套，我们只能把该进程后面的进程唤醒，用来争夺同一个资源。因此需要唤醒队列头进程*p，然后再把它置为睡眠*/
+		(**p).state=0;
+		fprintk(3,"%ld\t%c\t%ld\n",(*p)->pid,'J',jiffies);
+		goto repeat;
+	}
+	*p=NULL;
+	if (tmp)
+		tmp->state=0;
+		fprintk(3,"%ld\t%c\t%ld\n",tmp->pid,'J',jiffies);
+}
